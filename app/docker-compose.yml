@@ -1,0 +1,12 @@
+services:
+  app:
+    build: .
+    container_name: rabbitmq-lab-app
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATA_DIR: /app/data
+    ports:
+      - '80:3000'
+    volumes:
+      - ./data:/app/data

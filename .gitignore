@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.env
+app/data/
+app/api/data/
+app/api/public/
+rabbit/certs/
+.DS_Store

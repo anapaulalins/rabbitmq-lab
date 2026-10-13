@@ -1,0 +1,16 @@
+{
+  "name": "rabbitmq-lab-consumer",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node --env-file=.env index.js"
+  },
+  "dependencies": {
+    "amqp-connection-manager": "4.1.14",
+    "amqplib": "0.10.4"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

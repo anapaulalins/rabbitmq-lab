@@ -1,0 +1,11 @@
+# Etapa 2: liga o AMQPS (TLS) para o cliente conectar pela internet.
+# Uso: docker compose -f docker-compose.yml -f docker-compose.tls.yml up -d
+services:
+  rabbitmq:
+    ports:
+      - '5671:5671' # AMQPS (cliente -> Rabbit, internet)
+      # Para testar a ideia de "usar a 443", troque a linha acima por:
+      # - '443:5671'
+    volumes:
+      - ./certs:/etc/rabbitmq/certs:ro
+      - ./rabbitmq-tls.conf:/etc/rabbitmq/conf.d/20-tls.conf:ro

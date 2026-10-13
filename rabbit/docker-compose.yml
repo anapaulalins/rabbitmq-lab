@@ -1,0 +1,19 @@
+services:
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    container_name: rabbitmq
+    # O RabbitMQ guarda os dados numa pasta com o nome do host.
+    # Fixar o hostname evita "perder" as filas quando o container é recriado.
+    hostname: rabbit-lab
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_ADMIN_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_ADMIN_PASSWORD}
+    ports:
+      - '5672:5672' # AMQP sem TLS (API -> Rabbit, rede privada)
+      - '15672:15672' # painel web + API de administração
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+
+volumes:
+  rabbitmq_data:

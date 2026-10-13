@@ -1,0 +1,18 @@
+{
+  "name": "rabbitmq-lab-api",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch --env-file=../.env src/server.js"
+  },
+  "dependencies": {
+    "amqp-connection-manager": "4.1.14",
+    "amqplib": "0.10.4",
+    "express": "4.21.1"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
