@@ -47,11 +47,18 @@ Laboratório para entender, na prática e na AWS, o fluxo de eventos por RabbitM
 
 ---
 
-## Passo 1: Key pair e Security Groups
+## Passo 1: IAM role (SSM) e Security Groups
 
 No console da AWS, escolha **uma região** (ex.: `us-east-1`) e use sempre ela.
 
-1. **EC2 → Key pairs → Create key pair**: `rabbitmq-lab`, tipo `.pem`. Guarde o arquivo e rode `chmod 400 rabbitmq-lab.pem`.
+Para acessar as máquinas usamos o **SSM Session Manager**, não SSH: sem porta 22 aberta, sem arquivo `.pem` e com acesso controlado pelo IAM.
+
+1. **IAM → Roles → Create role**
+   - Trusted entity: **AWS service → EC2**
+   - Permissão: **`AmazonSSMManagedInstanceCore`**
+   - Nome: `lab-ec2-ssm`
+
+   > O Amazon Linux 2023 já vem com o SSM Agent instalado. A instância só precisa da role e de saída para a internet (IP público na VPC default resolve).
 
 2. **EC2 → Security Groups → Create**, na VPC default.
 
@@ -59,20 +66,21 @@ No console da AWS, escolha **uma região** (ex.: `us-east-1`) e use sempre ela.
 
    | Tipo | Porta | Origem | Por quê |
    |---|---|---|---|
-   | SSH | 22 | My IP | você acessar a máquina |
    | HTTP | 80 | My IP | você abrir a tela no navegador |
 
    **`sg-lab-rabbit`** (RabbitMQ):
 
    | Tipo | Porta | Origem | Por quê |
    |---|---|---|---|
-   | SSH | 22 | My IP | você acessar a máquina |
    | Custom TCP | 5672 | **`sg-lab-app`** (selecione o SG, não um IP) | API publica pela rede privada |
    | Custom TCP | 15672 | **`sg-lab-app`** | API cria usuários e filas |
-   | Custom TCP | 15672 | My IP | você ver o painel do Rabbit |
    | Custom TCP | 5672 | My IP | **etapa 1**: o consumer no seu notebook (sem TLS, só para o lab) |
 
+   Repare que **não tem porta 22** e que o painel (15672) **não fica aberto para a internet**. Você vai acessar o painel por um túnel do SSM (Passo 2), igual faria em produção.
+
    > "My IP" é o IP da sua internet agora. Se ele mudar (outra rede, roteador reiniciou), atualize as regras.
+
+3. **No seu notebook** (para o túnel do painel): instale a [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) e o [Session Manager plugin](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html), e rode `aws configure` com um usuário da sua conta.
 
 ---
 
@@ -82,29 +90,36 @@ No console da AWS, escolha **uma região** (ex.: `us-east-1`) e use sempre ela.
    - Nome: `lab-rabbit`
    - AMI: **Amazon Linux 2023**
    - Tipo: `t3.micro`
-   - Key pair: `rabbitmq-lab`
+   - Key pair: **Proceed without a key pair**
    - Network: VPC default, **Auto-assign public IP: Enable**
    - Security group: **`sg-lab-rabbit`**
+   - Advanced details → **IAM instance profile: `lab-ec2-ssm`**
    - Storage: 8 GB está bom
 
 2. Anote o **IP público** e o **IP privado** (aba *Details* da instância).
 
-3. Acesse e instale o Docker:
+3. Conecte: selecione a instância → **Connect → Session Manager → Connect**. Leva 1–2 minutos depois de criar até o botão liberar.
+
+   A sessão abre como `ssm-user` num `sh`. Troque para o `ec2-user`, para todos os comandos ficarem iguais:
 
    ```bash
-   ssh -i rabbitmq-lab.pem ec2-user@IP_PUBLICO_DO_RABBIT
+   sudo su - ec2-user
+   ```
 
+4. Instale o Docker:
+
+   ```bash
    sudo dnf install -y git
    git clone https://github.com/SEU_USUARIO/rabbitmq-lab.git
    cd rabbitmq-lab
    ./scripts/setup-ec2.sh
-   exit   # saia e entre de novo para o grupo docker valer
+   exit                   # volta para o ssm-user
+   sudo su - ec2-user     # entra de novo para o grupo docker valer
    ```
 
-4. Suba o RabbitMQ:
+5. Suba o RabbitMQ:
 
    ```bash
-   ssh -i rabbitmq-lab.pem ec2-user@IP_PUBLICO_DO_RABBIT
    cd rabbitmq-lab/rabbit
    cp .env.example .env
    nano .env          # troque a senha do admin
@@ -112,29 +127,39 @@ No console da AWS, escolha **uma região** (ex.: `us-east-1`) e use sempre ela.
    docker compose logs -f    # espere "Server startup complete", depois Ctrl+C
    ```
 
-5. Abra `http://IP_PUBLICO_DO_RABBIT:15672` e entre com o admin do `.env`. Esse é o painel do Rabbit, e você vai usar bastante.
+6. **Painel do Rabbit pelo túnel do SSM.** No seu notebook:
+
+   ```bash
+   aws ssm start-session --target ID_DA_INSTANCIA_RABBIT \
+     --document-name AWS-StartPortForwardingSession \
+     --parameters '{"portNumber":["15672"],"localPortNumber":["15672"]}'
+   ```
+
+   Deixe esse terminal aberto, acesse `http://localhost:15672` e entre com o admin do `.env`. Esse é o painel do Rabbit, e você vai usar bastante.
+
+   > O ID da instância aparece no console, no formato `i-0abc123...`. O túnel passa pelo SSM: a 15672 não está aberta para a internet.
 
 ---
 
 ## Passo 3: EC2 da API
 
-1. **Launch instance** igual à anterior, mas com nome `lab-app` e Security group **`sg-lab-app`**.
+1. **Launch instance** igual à anterior (sem key pair, com a role `lab-ec2-ssm`), mas com nome `lab-app` e Security group **`sg-lab-app`**.
 
-2. Instale:
+2. Conecte pelo Session Manager e instale:
 
    ```bash
-   ssh -i rabbitmq-lab.pem ec2-user@IP_PUBLICO_DO_APP
+   sudo su - ec2-user
    sudo dnf install -y git
    git clone https://github.com/SEU_USUARIO/rabbitmq-lab.git
    cd rabbitmq-lab
    ./scripts/setup-ec2.sh
    exit
+   sudo su - ec2-user
    ```
 
 3. Configure e suba:
 
    ```bash
-   ssh -i rabbitmq-lab.pem ec2-user@IP_PUBLICO_DO_APP
    cd rabbitmq-lab/app
    cp .env.example .env
    nano .env
@@ -177,7 +202,7 @@ O consumer **abriu uma conexão de saída** até o Rabbit. Seu notebook não abr
 
 ## Experimentos
 
-Esse é o objetivo do lab. Faça com o painel do Rabbit (`:15672`, aba *Queues*) aberto ao lado.
+Esse é o objetivo do lab. Faça com o painel do Rabbit (túnel do SSM em `localhost:15672`, aba *Queues*) aberto ao lado. Os comandos `docker ...` são rodados numa sessão do Session Manager na instância indicada.
 
 ### 1. Cliente offline não perde eventos
 1. Pare o consumer (Ctrl+C).
@@ -279,7 +304,7 @@ cd consumer && npm install && cp .env.example .env && npm start
 
 - **EC2 → Instances** → selecione as duas → **Terminate**.
 - Libere Elastic IPs, se criou.
-- Apague os Security Groups e o key pair, se quiser.
+- Apague os Security Groups e a role `lab-ec2-ssm`, se quiser.
 
 ---
 
