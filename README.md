@@ -4,7 +4,9 @@ Laboratório para entender, na prática e na AWS, o fluxo de eventos por RabbitM
 
 - uma **API** publica eventos de visitas (`company.<id>.visit.created`);
 - cada **empresa** pode ter uma **fila própria** com um **usuário que só consome** essa fila;
-- a **integração do cliente** conecta no Rabbit pela internet e consome a fila, **sem abrir porta nenhuma do lado dela**.
+- uma **empresa mãe** recebe na fila dela também os eventos das **empresas filhas**;
+- a **integração do cliente** conecta no Rabbit pela internet e consome a fila, **sem abrir porta nenhuma do lado dela**;
+- um **gerador de carga** publica milhares de eventos por segundo para você ver os limites na prática.
 
 ```
                     VPC (rede privada da AWS)
@@ -248,6 +250,105 @@ Crie visitas numa empresa com a fila desligada. A API publica normalmente, mas o
 
 ---
 
+## Experimentos: empresa mãe e filhas
+
+Igual ao projeto real: uma empresa é **filha** quando tem `parentCompanyId`, e só existe um nível (filha não tem filhas).
+
+**Como funciona:** a fila da mãe fica ligada (*binding*) a `company.<idMae>.#` **e** a `company.<idFilha>.#` de cada filha. O próprio Rabbit copia os eventos das filhas para a fila da mãe, e a API continua publicando uma vez só. No consumer, o nome ao lado de cada evento mostra de qual empresa ele veio.
+
+### 10. A mãe recebe os eventos da filha
+1. Crie a empresa **Mãe** e clique em **Ligar fila**. Rode o consumer com as credenciais dela.
+2. Crie a empresa **Filha 1**, escolhendo "Filha de Mãe" no seletor.
+3. Crie uma visita na **Filha 1**. Ela chega no consumer da Mãe, marcada como `Filha 1`.
+4. No card da Mãe aparece "Esta fila também recebe os eventos de: Filha 1". No painel do Rabbit: *Queues* → `company.<idMae>` → *Bindings*.
+
+### 11. Filha criada depois que a mãe já tem fila
+1. Com a fila da Mãe ligada, crie a **Filha 2**.
+2. O binding é adicionado na hora (veja no painel). Crie uma visita na Filha 2: ela chega na Mãe.
+
+> No projeto real, isso é o `syncParentEventStreamBinding`.
+
+### 12. A mãe liga a fila depois que as filhas já existem
+1. Desligue a fila da Mãe, crie visitas nas filhas (vão para lugar nenhum) e ligue a fila de novo.
+2. A fila nasce ligada a todas as filhas atuais. Repare que as visitas criadas enquanto estava desligada não chegam: a fila não existia.
+
+### 13. A filha também tem fila própria
+1. Ligue a fila da **Filha 1** e copie as credenciais para um segundo arquivo, por exemplo `consumer/.env.filha`.
+2. Rode um segundo consumer em outro terminal: `node --env-file=.env.filha index.js`.
+3. Crie uma visita na Filha 1: **os dois consumers recebem**, cada fila com a sua cópia.
+4. Crie uma visita na Mãe: só o consumer da Mãe recebe, porque a filha não vê os eventos da mãe.
+
+### 14. Removendo uma filha
+Clique em **Remover** na Filha 2. O binding sai da fila da Mãe. Não dá para remover a Mãe enquanto ela tiver filhas.
+
+---
+
+## Experimentos: volume (teste de carga)
+
+O painel **Teste de carga** publica eventos `visit.created` sintéticos direto no Rabbit, numa taxa fixa (até 5.000/s) e em round-robin entre as empresas escolhidas. Esses eventos não são gravados no "banco" do lab, porque o gargalo seria o arquivo JSON e não o Rabbit.
+
+Para volume alto, rode o consumer em **modo stats**, que mostra um resumo por segundo em vez de uma linha por evento:
+
+```bash
+MODE=stats npm start
+# 10:31:02 498/s | total 12450 | latência média 162ms, máx 410ms | Mãe=6225 Filha 1=6225
+```
+
+Durante os testes, deixe aberto:
+- o card do teste (publicadas × **confirmadas pelo Rabbit** × presas na memória da API);
+- o card da empresa ("esperando na fila", "chegando/s", "consumidas/s");
+- o painel do Rabbit, aba *Overview* (gráfico de *Message rates*);
+- na EC2 rabbit: `docker stats rabbitmq` (CPU e memória do container).
+
+### Quanto aguenta?
+
+10 eventos/s não chega nem perto do limite. Ordens de grandeza para este lab (mensagens pequenas, persistentes, com confirmação):
+
+| Peça | Limite aproximado | O que limita |
+|---|---|---|
+| RabbitMQ numa `t3.micro` | centenas a alguns milhares/s | CPU e disco. Os créditos de CPU da `t3` acabam em carga contínua. |
+| Gerador da API | até 5.000/s (trava do lab) | um processo Node |
+| **Consumer pela internet** | muitas vezes **o menor de todos** | latência de rede × prefetch (experimento 16) |
+
+Não acredite na tabela: o objetivo dos experimentos abaixo é você **medir** na sua conta.
+
+### 15. Carga básica
+1. Ligue a fila da Mãe e deixe a Filha 1 como filha dela. Rode o consumer da Mãe com `MODE=stats`.
+2. Teste: Mãe + Filha 1, **100/s por 30s** (3.000 eventos).
+3. Confira se "confirmadas" chega a 3.000 e se o consumer recebe tudo, metade de cada empresa.
+
+### 16. Prefetch × latência de rede (o mais importante para o cliente)
+O consumer só recebe `PREFETCH` mensagens sem ack por vez. Cada ack demora um "ida e volta" pela internet, então a vazão máxima fica em torno de **prefetch ÷ latência**. Exemplo: com prefetch 10 e 150 ms até a AWS, são ~65 msg/s.
+
+1. Teste: **500/s por 30s**, consumer com `PREFETCH=10`. "Esperando na fila" cresce, porque o consumer não acompanha.
+2. Pare, rode com `PREFETCH=200` e repita. A fila esvazia muito mais rápido.
+
+> Para a integração real do cliente, esse é o ajuste que mais importa. A latência ele não controla, o prefetch sim.
+
+### 17. Consumer lento
+1. `PROCESSING_MS=50 PREFETCH=10 MODE=stats npm start`, que simula o cliente gravando cada evento no banco dele.
+2. Teste: 300/s por 30s. Quando a chegada é maior que o consumo, **a fila absorve a diferença** e o consumer vai drenando depois. Ninguém perde evento, só atrasa.
+
+### 18. Limite da fila (max-length)
+A policy do lab limita cada fila a **100.000 mensagens** (`drop-head`: ao estourar, descarta as **mais antigas**).
+1. Pare o consumer.
+2. Teste: **2.000/s por 60s** (120.000 eventos).
+3. "Esperando na fila" para em 100.000. Rode o consumer: o total recebido é 100.000, e as 20.000 primeiras se perderam.
+
+> Essa é a proteção contra fila abandonada. No projeto real, vale definir esse número junto com o cliente (quantos dias offline ele pode ficar).
+
+### 19. Achar o limite do Rabbit
+1. Com o consumer em `MODE=stats` e `PREFETCH=200`, aumente a taxa: 500, 1.000, 2.000, 5.000/s, por 30s cada.
+2. Quando "confirmação real" ficar abaixo do pedido, ou "presas na memória da API" começar a subir, você achou o teto.
+3. Olhe `docker stats rabbitmq` e, no CloudWatch da instância, a métrica **CPUCreditBalance**. Se os créditos zerarem, a `t3` fica limitada a ~10% de CPU e a vazão despenca.
+
+### 20. Rabbit cai no meio da carga
+1. Teste: 500/s por 60s. No meio, `docker stop rabbitmq` na EC2 rabbit.
+2. "Presas na memória da API" sobe rápido (veja o uso de memória do container da API com `docker stats`).
+3. `docker start rabbitmq`: tudo é enviado. Se a API reiniciasse nesse intervalo, tudo se perderia (experimento 4, em escala).
+
+---
+
 ## Etapa 2: TLS (cliente pela internet com segurança)
 
 Na etapa 1, a senha do cliente trafega sem criptografia na 5672. Para fazer do jeito certo:
@@ -315,5 +416,7 @@ cd consumer && npm install && cp .env.example .env && npm start
 | Conexão com reconexão automática + publish | `app/api/src/rabbitmq.js` |
 | Criar/remover usuário, fila, permissão e policy por empresa | `app/api/src/rabbitmqAdmin.js` |
 | Ligar/desligar a fila (Rabbit antes do banco) | `app/api/src/server.js` (`PATCH /event-stream`) |
-| Cliente consumindo com prefetch e ack | `consumer/index.js` |
+| Empresa mãe recebendo eventos das filhas (bindings) | `app/api/src/rabbitmqAdmin.js` (`reconcileBindings`, `bindChildToParentQueue`) |
+| Gerador de carga com publisher confirms | `app/api/src/loadTest.js` |
+| Cliente consumindo com prefetch e ack (+ modo stats) | `consumer/index.js` |
 | TLS no Rabbit | `rabbit/rabbitmq-tls.conf`, `rabbit/docker-compose.tls.yml` |

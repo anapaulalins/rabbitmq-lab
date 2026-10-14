@@ -40,6 +40,9 @@ export function getRabbitStatus() {
  * Publica no exchange com routing key company.<companyId>.<entity>.<action>.
  * Não espera a confirmação, igual ao hook publishEvent do projeto real:
  * a requisição HTTP responde na hora mesmo com o Rabbit fora do ar.
+ *
+ * `confirmation` resolve quando o Rabbit confirma que gravou a mensagem
+ * (publisher confirms). O teste de carga usa para contar confirmadas.
  */
 export function publishEvent(companyId, entity, action, data) {
   const message = {
@@ -51,15 +54,20 @@ export function publishEvent(companyId, entity, action, data) {
     data,
   };
 
-  channel
-    .publish(config.exchange, `company.${companyId}.${entity}.${action}`, message, {
+  const confirmation = channel.publish(
+    config.exchange,
+    `company.${companyId}.${entity}.${action}`,
+    message,
+    {
       persistent: true,
       messageId: message.eventId,
       contentType: 'application/json',
-    })
-    .catch((err) =>
-      console.error(`[rabbitmq] falha ao publicar ${message.eventId}: ${err.message}`)
-    );
+    }
+  );
 
-  return message;
+  confirmation.catch((err) =>
+    console.error(`[rabbitmq] falha ao publicar ${message.eventId}: ${err.message}`)
+  );
+
+  return { message, confirmation };
 }

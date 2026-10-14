@@ -30,10 +30,16 @@ export function getCompany(id) {
   return db.companies.find((c) => c.id === id);
 }
 
-export function createCompany(name) {
+// Empresa filha: tem parentCompanyId (um nível só, igual ao projeto real)
+export function listChildren(parentCompanyId) {
+  return db.companies.filter((c) => c.parentCompanyId === parentCompanyId);
+}
+
+export function createCompany(name, parentCompanyId = null) {
   const company = {
     id: crypto.randomUUID(),
     name,
+    parentCompanyId,
     eventStreamEnabled: false,
     createdAt: new Date().toISOString(),
   };
@@ -47,6 +53,12 @@ export function updateCompany(id, changes) {
   Object.assign(company, changes);
   save();
   return company;
+}
+
+export function removeCompany(id) {
+  db.companies = db.companies.filter((c) => c.id !== id);
+  db.visits = db.visits.filter((v) => v.companyId !== id);
+  save();
 }
 
 export function listVisits(companyId) {

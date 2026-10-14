@@ -90,7 +90,8 @@ code {
   flex-wrap: wrap;
 }
 
-input {
+input,
+select {
   flex: 1;
   min-width: 160px;
   padding: 8px 10px;
@@ -149,7 +150,7 @@ button.link {
 
 .stats {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
   gap: 8px;
   margin-top: 12px;
 }
@@ -214,4 +215,101 @@ button.link {
 .tag {
   font-size: 0.75rem;
   color: var(--ok);
+}
+
+.small {
+  font-size: 0.85rem;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+}
+
+.badge {
+  display: inline-block;
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  vertical-align: middle;
+}
+
+.badge.parent {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.card.child {
+  margin-left: 24px;
+  border-left: 3px solid var(--primary);
+}
+
+@media (max-width: 600px) {
+  .card.child {
+    margin-left: 8px;
+  }
+}
+
+.card.load {
+  border-color: var(--primary);
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+
+.chip.on {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.chip input {
+  flex: none;
+  min-width: 0;
+  margin: 0;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.8rem;
+  color: var(--muted);
+  flex: 1;
+  min-width: 140px;
+}
+
+.row {
+  align-items: flex-end;
+}
+
+.progress {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--border);
+  overflow: hidden;
+  margin-top: 12px;
+}
+
+.progress div {
+  height: 100%;
+  background: var(--primary);
+  transition: width 0.3s;
 }

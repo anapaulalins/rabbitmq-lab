@@ -16,6 +16,8 @@ function usePolling(fn, ms, deps) {
   return [value, refresh];
 }
 
+const formatNumber = (n) => Number(n ?? 0).toLocaleString('pt-BR');
+
 function RabbitStatus() {
   const [status] = usePolling(api.status, 2000, []);
   const rabbit = status?.rabbit;
@@ -25,7 +27,7 @@ function RabbitStatus() {
       <span className="dot" />
       {rabbit?.connected ? 'API conectada ao RabbitMQ' : 'API sem conexão com o RabbitMQ'}
       {rabbit?.pendingPublishes > 0 && (
-        <strong> · {rabbit.pendingPublishes} publicação(ões) presas na memória da API</strong>
+        <strong> · {formatNumber(rabbit.pendingPublishes)} publicação(ões) presas na memória da API</strong>
       )}
     </div>
   );
@@ -55,32 +57,52 @@ function Credentials({ credentials, onClose }) {
   );
 }
 
-function QueueStats({ companyId, enabled }) {
+function QueueStats({ company, companiesById }) {
+  const enabled = company.eventStreamEnabled;
   const [stats] = usePolling(
-    () => (enabled ? api.queueStats(companyId) : Promise.resolve(null)),
+    () => (enabled ? api.queueStats(company.id) : Promise.resolve(null)),
     2000,
-    [companyId, enabled]
+    [company.id, enabled]
   );
 
-  if (!enabled) return <p className="muted">Sem fila: os eventos desta empresa são descartados pelo Rabbit.</p>;
+  if (!enabled) {
+    return <p className="muted">Sem fila: o Rabbit descarta os eventos desta empresa (a não ser que a mãe tenha fila).</p>;
+  }
   if (!stats) return <p className="muted">Carregando fila…</p>;
 
+  const childNames = stats.boundCompanyIds
+    .filter((id) => id !== company.id)
+    .map((id) => companiesById[id]?.name ?? id.slice(0, 8));
+
   return (
-    <div className="stats">
-      <div>
-        <span>{stats.messagesReady}</span>esperando na fila
+    <>
+      <div className="stats">
+        <div>
+          <span>{formatNumber(stats.messagesReady)}</span>esperando na fila
+        </div>
+        <div>
+          <span>{formatNumber(stats.messagesUnacked)}</span>entregues sem ack
+        </div>
+        <div className={stats.consumers > 0 ? 'ok' : 'down'}>
+          <span>{stats.consumers}</span>consumidor(es)
+        </div>
+        <div>
+          <span>{formatNumber(Math.round(stats.incomingRate))}/s</span>chegando
+        </div>
+        <div>
+          <span>{formatNumber(Math.round(stats.ackRate))}/s</span>consumidas (ack)
+        </div>
       </div>
-      <div>
-        <span>{stats.messagesUnacked}</span>entregues sem ack
-      </div>
-      <div className={stats.consumers > 0 ? 'ok' : 'down'}>
-        <span>{stats.consumers}</span>consumidor(es)
-      </div>
-    </div>
+      {childNames.length > 0 && (
+        <p className="muted small">
+          Esta fila também recebe os eventos de: <strong>{childNames.join(', ')}</strong>
+        </p>
+      )}
+    </>
   );
 }
 
-function CompanyPanel({ company, onChange }) {
+function CompanyPanel({ company, parent, childCompanies, companiesById, onChange, onRemove }) {
   const [credentials, setCredentials] = useState(null);
   const [visitorName, setVisitorName] = useState('');
   const [busy, setBusy] = useState(false);
@@ -124,22 +146,42 @@ function CompanyPanel({ company, onChange }) {
       refreshVisits();
     });
 
+  const remove = () =>
+    run(async () => {
+      if (!window.confirm(`Remover ${company.name}?`)) return;
+      await api.removeCompany(company.id);
+      onRemove(company.id);
+    });
+
   return (
-    <section className="card">
+    <section className={`card ${parent ? 'child' : ''}`}>
       <header>
         <div>
-          <h2>{company.name}</h2>
+          <h2>
+            {company.name}{' '}
+            {parent && <span className="badge">filha de {parent.name}</span>}
+            {childCompanies.length > 0 && <span className="badge parent">mãe de {childCompanies.length}</span>}
+          </h2>
           <code className="muted">{company.id}</code>
         </div>
-        <button disabled={busy} onClick={toggleStream} className={company.eventStreamEnabled ? 'danger' : ''}>
-          {company.eventStreamEnabled ? 'Desligar fila' : 'Ligar fila (eventStreamEnabled)'}
-        </button>
+        <div className="actions">
+          <button disabled={busy} onClick={toggleStream} className={company.eventStreamEnabled ? 'danger' : ''}>
+            {company.eventStreamEnabled ? 'Desligar fila' : 'Ligar fila'}
+          </button>
+          <button disabled={busy} className="secondary" onClick={remove}>
+            Remover
+          </button>
+        </div>
       </header>
 
       {error && <p className="error">{error}</p>}
       {credentials && <Credentials credentials={credentials} onClose={() => setCredentials(null)} />}
 
-      <QueueStats companyId={company.id} enabled={company.eventStreamEnabled} />
+      <QueueStats company={company} companiesById={companiesById} />
+
+      {parent?.eventStreamEnabled && (
+        <p className="muted small">Os eventos desta empresa também vão para a fila de {parent.name}.</p>
+      )}
 
       <div className="row">
         <input
@@ -174,24 +216,175 @@ function CompanyPanel({ company, onChange }) {
   );
 }
 
+function LoadTestPanel({ companies }) {
+  const [selected, setSelected] = useState([]);
+  const [rate, setRate] = useState(100);
+  const [durationSeconds, setDurationSeconds] = useState(30);
+  const [error, setError] = useState(null);
+  const [status, refresh] = usePolling(api.loadTestStatus, 1000, []);
+
+  // Remove da seleção empresas que foram apagadas
+  useEffect(() => {
+    setSelected((ids) => ids.filter((id) => companies.some((c) => c.id === id)));
+  }, [companies]);
+
+  const toggle = (id) =>
+    setSelected((ids) => (ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]));
+
+  async function start() {
+    setError(null);
+    try {
+      await api.startLoadTest({
+        companyIds: selected,
+        rate: Number(rate),
+        durationSeconds: Number(durationSeconds),
+      });
+      refresh();
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function stop() {
+    await api.stopLoadTest();
+    refresh();
+  }
+
+  const running = status?.running;
+  const progress = status?.target ? Math.min(100, (status.published / status.target) * 100) : 0;
+
+  return (
+    <section className="card load">
+      <header>
+        <h2>Teste de carga</h2>
+      </header>
+      <p className="muted small">
+        Publica eventos <code>visit.created</code> sintéticos direto no Rabbit, em round-robin entre as empresas
+        escolhidas. Não grava no "banco" do lab.
+      </p>
+
+      <div className="chips">
+        {companies.map((company) => (
+          <label key={company.id} className={selected.includes(company.id) ? 'chip on' : 'chip'}>
+            <input
+              type="checkbox"
+              checked={selected.includes(company.id)}
+              onChange={() => toggle(company.id)}
+              disabled={running}
+            />
+            {company.name}
+          </label>
+        ))}
+        {!companies.length && <span className="muted">Crie uma empresa primeiro.</span>}
+      </div>
+
+      <div className="row">
+        <label className="field">
+          Eventos por segundo
+          <input
+            type="number"
+            min="1"
+            max={status?.maxRate ?? 5000}
+            value={rate}
+            onChange={(e) => setRate(e.target.value)}
+            disabled={running}
+          />
+        </label>
+        <label className="field">
+          Duração (s)
+          <input
+            type="number"
+            min="1"
+            max="600"
+            value={durationSeconds}
+            onChange={(e) => setDurationSeconds(e.target.value)}
+            disabled={running}
+          />
+        </label>
+        {running ? (
+          <button className="danger" onClick={stop}>
+            Parar
+          </button>
+        ) : (
+          <button onClick={start} disabled={!selected.length}>
+            Iniciar ({formatNumber(rate * durationSeconds)} eventos)
+          </button>
+        )}
+      </div>
+
+      {error && <p className="error">{error}</p>}
+
+      {status?.target > 0 && (
+        <>
+          <div className="progress">
+            <div style={{ width: `${progress}%` }} />
+          </div>
+          <div className="stats">
+            <div>
+              <span>{formatNumber(status.published)}</span>publicadas de {formatNumber(status.target)}
+            </div>
+            <div>
+              <span>{formatNumber(status.confirmed)}</span>confirmadas pelo Rabbit
+            </div>
+            <div className={status.failed ? 'down' : ''}>
+              <span>{formatNumber(status.failed)}</span>falhas
+            </div>
+            <div>
+              <span>{formatNumber(status.confirmedPerSecond)}/s</span>
+              confirmação real (pedido: {formatNumber(status.rate)}/s)
+            </div>
+            <div className={status.pendingInApiMemory ? 'down' : ''}>
+              <span>{formatNumber(status.pendingInApiMemory)}</span>presas na memória da API
+            </div>
+          </div>
+          <p className="muted small">
+            {running ? 'Rodando' : status.stoppedEarly ? 'Interrompido' : 'Concluído'} · {status.elapsedSeconds}s ·{' '}
+            {status.companies?.join(', ')}
+          </p>
+        </>
+      )}
+    </section>
+  );
+}
+
 export default function App() {
   const [companies, setCompanies] = useState([]);
   const [name, setName] = useState('');
+  const [parentCompanyId, setParentCompanyId] = useState('');
+  const [message, setMessage] = useState(null);
 
   useEffect(() => {
     api.listCompanies().then(setCompanies);
   }, []);
 
+  const companiesById = Object.fromEntries(companies.map((c) => [c.id, c]));
+  // Só empresas sem mãe podem ser mãe (um nível só)
+  const possibleParents = companies.filter((c) => !c.parentCompanyId);
+
   async function createCompany(e) {
     e.preventDefault();
     if (!name.trim()) return;
-    const company = await api.createCompany(name);
-    setCompanies((list) => [...list, company]);
-    setName('');
+    setMessage(null);
+    try {
+      const { company, warning } = await api.createCompany(name, parentCompanyId || null);
+      setCompanies((list) => [...list, company]);
+      setName('');
+      if (warning) setMessage(warning);
+    } catch (err) {
+      setMessage(err.message);
+    }
   }
 
   const replaceCompany = (updated) =>
     setCompanies((list) => list.map((c) => (c.id === updated.id ? updated : c)));
+
+  const removeCompany = (id) => setCompanies((list) => list.filter((c) => c.id !== id));
+
+  // Mães seguidas das filhas
+  const ordered = possibleParents.flatMap((parent) => [
+    parent,
+    ...companies.filter((c) => c.parentCompanyId === parent.id),
+  ]);
 
   return (
     <main>
@@ -200,11 +393,30 @@ export default function App() {
 
       <form className="row" onSubmit={createCompany}>
         <input placeholder="Nome da empresa" value={name} onChange={(e) => setName(e.target.value)} />
+        <select value={parentCompanyId} onChange={(e) => setParentCompanyId(e.target.value)}>
+          <option value="">Independente / mãe</option>
+          {possibleParents.map((c) => (
+            <option key={c.id} value={c.id}>
+              Filha de {c.name}
+            </option>
+          ))}
+        </select>
         <button type="submit">Criar empresa</button>
       </form>
+      {message && <p className="error">{message}</p>}
 
-      {companies.map((company) => (
-        <CompanyPanel key={company.id} company={company} onChange={replaceCompany} />
+      <LoadTestPanel companies={ordered} />
+
+      {ordered.map((company) => (
+        <CompanyPanel
+          key={company.id}
+          company={company}
+          parent={companiesById[company.parentCompanyId]}
+          childCompanies={companies.filter((c) => c.parentCompanyId === company.id)}
+          companiesById={companiesById}
+          onChange={replaceCompany}
+          onRemove={removeCompany}
+        />
       ))}
     </main>
   );

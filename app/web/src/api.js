@@ -12,7 +12,9 @@ async function request(method, path, body) {
 export const api = {
   status: () => request('GET', '/status'),
   listCompanies: () => request('GET', '/companies'),
-  createCompany: (name) => request('POST', '/companies', { name }),
+  createCompany: (name, parentCompanyId) =>
+    request('POST', '/companies', { name, parentCompanyId }),
+  removeCompany: (id) => request('DELETE', `/companies/${id}`),
   setEventStream: (id, enabled) =>
     request('PATCH', `/companies/${id}/event-stream`, { enabled }),
   queueStats: (id) => request('GET', `/companies/${id}/queue`),
@@ -21,4 +23,7 @@ export const api = {
     request('POST', `/companies/${id}/visits`, { visitorName }),
   checkIn: (id, visitId) =>
     request('PATCH', `/companies/${id}/visits/${visitId}`, { status: 'checked-in' }),
+  loadTestStatus: () => request('GET', '/load-test'),
+  startLoadTest: (payload) => request('POST', '/load-test', payload),
+  stopLoadTest: () => request('DELETE', '/load-test'),
 };
