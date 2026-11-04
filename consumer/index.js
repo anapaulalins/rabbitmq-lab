@@ -74,12 +74,9 @@ const channel = connection.createChannel({
       record(event, msg);
 
       if (!STATS_MODE) {
-        log(
-          msg.fields.routingKey,
-          `| ${event.data?.companyName ?? ''}`,
-          `| ${event.data?.visitorName ?? ''}`,
-          msg.fields.redelivered ? '| (reentregue)' : ''
-        );
+        log(msg.fields.routingKey, msg.fields.redelivered ? '| (reentregue)' : '');
+        // Evento completo, como a API publicou
+        console.log(JSON.stringify(event, null, 2));
       }
 
       if (PROCESSING_MS) await sleep(PROCESSING_MS);
