@@ -18,11 +18,16 @@ DOMAIN="${1:?informe o dominio}"
 EMAIL="${2:?informe o email}"
 RABBIT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 LIVE_DIR="/etc/letsencrypt/live/$DOMAIN"
-CERTBOT=(sudo docker run --rm -p 80:80 -v /etc/letsencrypt:/etc/letsencrypt certbot/certbot)
+CERTBOT=(sudo docker run --rm -p 80:80
+  -v /etc/letsencrypt:/etc/letsencrypt
+  -v /var/log/letsencrypt:/var/log/letsencrypt
+  certbot/certbot)
 
 if sudo test -d "$LIVE_DIR"; then
   echo ">> Certificado já existe, renovando se estiver perto de vencer"
-  RENEW_ARGS=(renew --standalone -n --cert-name "$DOMAIN")
+  # Sem terminal, o certbot espera até 8 min antes de renovar. O timer já
+  # sorteia o horário (RandomizedDelaySec), então essa espera só atrapalha.
+  RENEW_ARGS=(renew --standalone -n --no-random-sleep-on-renew --cert-name "$DOMAIN")
   if [ "${FORCE_RENEWAL:-}" = "1" ]; then
     RENEW_ARGS+=(--force-renewal)
   fi
