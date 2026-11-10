@@ -356,26 +356,44 @@ Na etapa 1, a senha do cliente trafega sem criptografia na 5672. Para fazer do j
 1. **Domínio grátis para teste:** use o [sslip.io](https://sslip.io). Se o IP público do Rabbit é `3.91.10.20`, o domínio `3-91-10-20.sslip.io` já aponta para ele, sem configurar nada.
 
 2. No `sg-lab-rabbit`, adicione:
-   - **80** de `0.0.0.0/0` (temporário: o Let's Encrypt precisa validar o domínio);
-   - **5671** de My IP.
+   - **80** de `0.0.0.0/0`. O Let's Encrypt valida o domínio por ela na emissão **e em toda renovação**, então ela fica aberta. Nada escuta na 80 fora os segundos em que o certbot roda;
+   - **5671** de `0.0.0.0/0` (ou My IP, se quiser testar antes).
 
 3. Na EC2 rabbit:
 
    ```bash
    cd rabbitmq-lab/rabbit
    ./scripts/issue-cert.sh 3-91-10-20.sslip.io seu@email.com
-   docker compose -f docker-compose.yml -f docker-compose.tls.yml up -d
+   printf '\nCOMPOSE_FILE=docker-compose.yml:docker-compose.tls.yml\n' >> .env
+   docker compose up -d
    ```
 
-4. **Remova a regra da porta 80** e **a regra 5672 de My IP**. A partir daqui, o cliente só usa a 5671.
+   O `COMPOSE_FILE` no `.env` faz todo `docker compose` usar os dois arquivos, sem precisar lembrar dos `-f`.
 
-5. Na EC2 app, em `app/.env`: `RABBITMQ_PUBLIC_URL=amqps://3-91-10-20.sslip.io:5671`, depois `docker compose up -d`.
+4. **Renovação automática.** O certificado vale 90 dias. Agende a renovação uma vez por máquina:
 
-6. Desligue e ligue a fila da empresa para gerar credenciais novas, já com `amqps://`. Atualize o `consumer/.env` e rode. Repare que a API continua usando a 5672 privada, sem TLS, porque esse tráfego nunca sai da VPC.
+   ```bash
+   ./scripts/install-cert-renewal.sh 3-91-10-20.sslip.io seu@email.com
+   ```
+
+   Um timer do systemd roda o `issue-cert.sh` todo dia às 03:00 (horário de Brasília). O certbot só renova quando faltam menos de 30 dias, e o RabbitMQ recarrega o certificado novo sem derrubar as conexões abertas.
+
+   | Para | Comando |
+   |---|---|
+   | Ver o próximo horário | `systemctl list-timers rabbitmq-cert-renew.timer` |
+   | Rodar agora | `sudo systemctl start rabbitmq-cert-renew.service` |
+   | Ver o que aconteceu | `journalctl -u rabbitmq-cert-renew.service -n 50` |
+   | Testar uma renovação de verdade | `FORCE_RENEWAL=1 ./scripts/issue-cert.sh <dominio> <email>` |
+
+   > O `FORCE_RENEWAL` emite um certificado novo mesmo sem estar perto de vencer. O Let's Encrypt aceita no máximo 5 certificados iguais por semana, então use só para testar.
+
+5. **Remova a regra 5672 de My IP**. A partir daqui, o cliente só usa a 5671.
+
+6. Na EC2 app, em `app/.env`: `RABBITMQ_PUBLIC_URL=amqps://3-91-10-20.sslip.io:5671`, depois `docker compose up -d`.
+
+7. Desligue e ligue a fila da empresa para gerar credenciais novas, já com `amqps://`. Atualize o `consumer/.env` e rode. Repare que a API continua usando a 5672 privada, sem TLS, porque esse tráfego nunca sai da VPC.
 
 > **Testar a porta 443:** em `docker-compose.tls.yml`, troque `5671:5671` por `443:5671`, libere a 443 no SG e use `amqps://...:443`. É útil quando o firewall do cliente só libera saída na 443.
-
-> O certificado vale 90 dias. Para renovar, rode o `issue-cert.sh` de novo (com a porta 80 aberta) ou coloque no cron.
 
 > **IP público muda** quando você para e liga a instância. Isso muda o domínio do sslip.io e o `.env`. Para não mudar, use um **Elastic IP** (cobrado enquanto existir).
 
@@ -420,3 +438,4 @@ cd consumer && npm install && cp .env.example .env && npm start
 | Gerador de carga com publisher confirms | `app/api/src/loadTest.js` |
 | Cliente consumindo com prefetch e ack (+ modo stats) | `consumer/index.js` |
 | TLS no Rabbit | `rabbit/rabbitmq-tls.conf`, `rabbit/docker-compose.tls.yml` |
+| Emissão e renovação automática do certificado | `rabbit/scripts/issue-cert.sh`, `rabbit/scripts/install-cert-renewal.sh` |
